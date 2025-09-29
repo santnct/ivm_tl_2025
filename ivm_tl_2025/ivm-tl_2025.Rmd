@@ -1,0 +1,144 @@
+---
+title: "ivm_tl_2025"
+output: html_document
+date: "2025-08-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+``` {r message=FALSE, warning=FALSE, include=FALSE}
+#Package
+library(readxl)
+library(tidyverse)
+library(psych)
+library(epitools)
+library(compareGroups)
+library(tableone)
+library(dplyr)
+library(table1)
+library(DescTools)
+library(stringr)
+library(writexl)
+library(flextable)
+
+library(gtsummary)
+library(emmeans)
+library(ggplot2)
+library(sjPlot) 
+library(effects)
+library(performance)
+library(stringr)
+
+```
+
+```{r}
+
+match_or <- read_excel("ivm_tl_2025.xlsx", sheet = "or") 
+match_or<- match_or %>% filter(EggDonor==0)
+
+lookup_or <- read_excel("ivm_tl_2025.xlsx", sheet = "look_up") 
+lookup_or<- lookup_or %>% select(-TreatmentCycle_ID)
+lookup_or<- lookup_or %>% filter(fill==1)
+lookup_or$track<-1
+
+
+match_or_lookup<- left_join(match_or,lookup_or, by= c('female_smart_code'='female_smart_code','OR_date'='OR_date'))
+match_or_lookup<- match_or_lookup %>% filter(track==1)
+
+```
+
+```{r}
+
+
+match_or_lookup <- match_or_lookup %>% mutate(sumd3=em_d3_g1+em_d3_g2+em_d3_g3,
+                                  gqe_d3= em_d3_g1+em_d3_g2,
+                          sumd5= em_d5_g1+em_d5_g2+em_d5_g3,
+                          sumd6=em_d6_g1+em_d6_g2+em_d6_g3,
+                          dayend= ifelse((sumd5==0&sumd6==0&sumd3>0),3,
+                                         ifelse((sumd5>0&sumd6==0&sumd3>0&em_d3_f==0&em_d6_f==0),5,
+                                                ifelse((sumd5>=0&sumd6>0&sumd3>=0&em_d3_f==0&em_d5_f==0),6,
+                                                       ifelse((em_d3_f>0&sumd5>0&sumd6==0),35,
+                                                              ifelse((em_d3_f>0&em_d5_f==0&sumd6>0),36,
+                                                                     ifelse((em_d3_f>0&em_d5_f>0&sumd6>0),356,
+                                                                            ifelse((em_d3_f==0&em_d5_f>0&sumd6>0),56,0))))))), 
+                          gqe=ifelse(dayend==3,em_d3_g1+em_d3_g2,
+                                     ifelse(dayend==5,em_d5_g1+em_d5_g2,
+                                            ifelse(dayend==6,em_d6_g1+em_d6_g2,
+                                                   ifelse(dayend==35,em_d3_f+em_d5_g1+em_d5_g2,
+                                                          ifelse(dayend==36,em_d3_f+em_d6_g1+em_d6_g2
+                                                                 ,ifelse(dayend==56,em_d5_f+em_d6_g1+em_d6_g2,
+                                                                         ifelse(dayend==356,em_d3_f+em_d5_f+em_d6_g1+em_d6_g2,0))))))),
+                          ne=ifelse(dayend==3,sumd3,
+                                  ifelse(dayend==5,sumd5,
+                                         ifelse(dayend==6,sumd6,
+                                                ifelse(dayend==35,sumd5+em_d3_f,
+                                                       ifelse(dayend==36,sumd6+em_d3_f,
+                                                              ifelse(dayend==356,sumd6+em_d3_f+em_d5_f,
+                                                                     ifelse(dayend==56,em_d5_f+sumd6,0))))))),
+                          sumd56=sumd5+sumd6,
+                          oocyte_0 = ifelse(opu==0,1,0),
+                          ne_0= ifelse(ne==0,1,0),
+                          age_female = Year(OR_date) - female_YOB,
+                     #     bmi_female = round(ifelse(is.na(female_weight) | is.na(female_height) , NA,
+                      #                              (ifelse(female_weight<female_height, female_weight/((female_height*female_height)/10000),
+                       #                                     female_height/((female_weight*female_weight)/10000)))),2),
+                          type_inf= ifelse(PARA==0|is.na(PARA),"Primary","Secondary"),
+                          )
+
+
+match_or_lookup$age_female
+hist(match_or_lookup$age_female)
+match_or_lookup$no_icsi
+hist(match_or_lookup$no_icsi)
+
+match_or_lookup$group
+
+ggplot(match_or_lookup, aes(x = factor(group), fill = factor(group))) +
+  geom_bar(position = "dodge") +
+  labs(x = "Category", fill = "Group") +
+  theme_minimal()
+```
+
+```{r}
+library(MatchIt)
+
+match_or_MatchIT <- match_or_lookup
+
+match_or_MatchIT$group %>% table()
+
+match_or_MatchIT <- match_or_MatchIT %>%
+  mutate(
+    # Ensure factor with desired reference
+    group_mod=ifelse(group=="icsi",0,
+                            ifelse(group=="ivm",1,NA)),
+  #  group_rigmen_mod = factor(group_rigmen, levels = c(0,1))  
+  )
+
+match_or_MatchIT_out<- matchit(group_mod~age_female+sumd5, data = match_or_MatchIT, method = "nearest", distance = "logit")
+match_or_MatchIT_data <- match.data(match_or_MatchIT_out,distance ="pscore")
+
+
+```
+```{r}
+
+
+em_tab <- read_excel(
+  "ivm_tl_2025.xlsx",
+  sheet = "all_icsi_2022-2024",
+  guess_max = 21474836,          # scan full sheet before choosing types
+  na = c("", "NA")
+)
+
+lookup_or <- match_or_MatchIT_data %>% select(TreatmentCycle_ID,group,group_mod)
+em_tab_match<- left_join(em_tab, lookup_or, by="TreatmentCycle_ID")
+em_tab_match_export<- em_tab_match %>% filter(is.na(group)==FALSE)
+em_tab_match_export<- em_tab_match_export %>%arrange(group,OR_date,female_smart_code,no_box,no_droplet)
+write_xlsx(em_tab_match_export,"em_tab_match_export.xlsx")
+
+
+
+```
+
